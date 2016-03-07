@@ -1,0 +1,28 @@
+{
+  "name": "db-migrate-cassandra",
+  "version": "0.1.0",
+  "description": "Cassandra driver for db-migrate",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charyorde/db-migrate-cassandra.git"
+  },
+  "keywords": [
+    "Cassandra",
+    "db-migrate"
+  ],
+  "author": "charyorde <dreyemi@gmail.com> (https://github.com/charyorde)",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/charyorde/db-migrate-cassandra/issues"
+  },
+  "homepage": "https://github.com/charyorde/db-migrate-cassandra#readme",
+  "dependencies": {
+    "bluebird": "^3.3.3",
+    "cassandra-driver": "^3.0.1",
+    "db-migrate-base": "^1.2.5"
+  }
+}
