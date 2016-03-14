@@ -1,0 +1,14 @@
+{
+  "dev": {
+    "keyspace": "db_migrate_test",
+    "user": "cassandra",
+    "password": "cassandra",
+    "driver": {
+        "require": "db-migrate-cql"
+    },
+    "host": "localhost",
+    "hosts": ["127.0.0.1"]
+  },
+
+  "sql-file": true
+}

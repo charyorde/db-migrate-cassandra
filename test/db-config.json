@@ -1,0 +1,10 @@
+{
+  "cassandra": {
+    "keyspace": "db_migrate_test",
+    "user": "cassandra",
+    "password": "cassandra",
+    "driver": "cassandra",
+    "host": "127.0.0.1",
+    "hosts": ["127.0.0.1"]
+  }
+}

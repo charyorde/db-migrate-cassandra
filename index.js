@@ -13,7 +13,29 @@ var CassandraDriver = Base.extend({
     this.internals = intern;
     this.connection = connection;
     this.schema = schema;
-    this.connection.connect();
+    this.connection.connect(function(err) {
+      if(err) {
+        throw err
+      }
+    });
+
+    this.connection.on('connected', function() {
+      log.verbose("Connected to Cassandra")
+    })
+  },
+
+  mapDataType: function(str) {
+    switch(str) {
+      case type.INTEGER:
+        return 'int'
+      case type.STRING:
+        return 'varchar'
+      case type.TIMESTAMP:
+        return 'timestamp'
+      case type.TEXT:
+        return 'text'
+    }
+    return this._super(str);
   },
 
   /**
@@ -50,13 +72,13 @@ var CassandraDriver = Base.extend({
     this.runSql(util.format('DROP KEYSPACE %s %s', ifExists, this.escapeDDL(dbName)), callback);
   },
 
-  createMigrationsTable = function(callback) {
+  createMigrationsTable: function(callback) {
 
     var options = {
       columns: {
-        'id': { type: type.INTEGER, primaryKey: true },
-        'name': { type: type.STRING, primaryKey: true}, // clustering key
-        'run_on': { type: type.TIMESTAMP, primaryKey: true} // clustering key
+        'id': { type: type.TEXT, primaryKey: true },
+        'run_on': { type: type.TIMESTAMP, clusteringKey: {order: 'DESC'} }, // clustering key
+        'name': { type: type.STRING, clusteringKey: {order: 'DESC'} } // clustering key
       },
       ifNotExists: true
     }
@@ -84,40 +106,79 @@ var CassandraDriver = Base.extend({
       ifNotExistsSql = "IF NOT EXISTS";
     }
 
+    var primaryKeyColumns = [];
+    var clusteringKeyColumns = []
+      , clusteringKeyOrder = []
+    var clusteringKey;
+    var withClustering = false
+    var columnDefOptions = {
+      emitPrimaryKey: false
+    }
+
     for (var columnName in columnSpecs) {
       var columnSpec = this.normalizeColumnSpec(columnSpecs[columnName]);
       columnSpecs[columnName] = columnSpec;
       if (columnSpec.primaryKey) {
         primaryKeyColumns.push(columnName);
       }
+      if (columnSpec.clusteringKey) {
+        clusteringKeyColumns.push(columnName)
+      }
     }
 
     // Add support for compound primary keys
-    // @todo Add support for Cassandra clustering keys
     var pkSql = '';
-    if (primaryKeyColumns.length > 1) {
+    if (primaryKeyColumns.length > 1 && !clusteringKeyColumns) {
       pkSql = util.format(', PRIMARY KEY (%s)',
         this.quoteDDLArr(primaryKeyColumns).join(', '));
-      
-    } else {
+  
+     } else if ((primaryKeyColumns.length > 1) && clusteringKeyColumns) {
+      // get the second item in pkSql and make it the clustering key
+      withClustering = true
+      pkSql = util.format(', PRIMARY KEY ((%s),%s)',
+        this.quoteDDLArr(primaryKeyColumns).join(', '), this.quoteDDLArr(clusteringKeyColumns).join(', '))
+
+    } else if (primaryKeyColumns.length == 1 && clusteringKeyColumns) {
+      withClustering = true
+      pkSql = util.format(', PRIMARY KEY ((%s),%s)',
+        this.quoteDDLArr(primaryKeyColumns).join(', '), this.quoteDDLArr(clusteringKeyColumns).join(', '))
+        
+    }
+    else {
       columnDefOptions.emitPrimaryKey = true;
     }
 
     var columnDefs = [];
     var foreignKeys = []; 
+    var cdefs
 
     for (var columnName in columnSpecs) {
       var columnSpec = columnSpecs[columnName];
       var constraint = this.createColumnDef(columnName, columnSpec, columnDefOptions, tableName);
-
+      
       columnDefs.push(constraint.constraints);
-      if (constraint.foreignKey)
-        foreignKeys.push(constraint.foreignKey);
     }
 
     var sql = util.format('CREATE TABLE %s %s (%s%s)', ifNotExistsSql, this.escapeDDL(tableName), columnDefs.join(', '), pkSql);
+    if (withClustering) {
+      clusteringKeyColumns.forEach(function(name) {
+        clusteringKeyOrder.push(name + " DESC")
+      })
+      sql = sql + " WITH CLUSTERING ORDER BY " + util.format('(%s)', clusteringKeyOrder.join(', '))
+    }
 
     return this.runSql(sql).bind(this).nodeify(callback)
+  },
+
+  createColumnDef: function(name, spec, options) {
+    name = this._escapeDDL + name + this._escapeDDL;
+    var type       = this.mapDataType(spec.type);
+    var len        = spec.length ? util.format('(%s)', spec.length) : '';
+    var constraint = this.createColumnConstraint(spec, options);
+
+    return {
+      constraints: [name, type, constraint].join(' ')
+    }
   },
 
   createColumnConstraint: function(spec, options, tableName, columnName){
@@ -128,14 +189,7 @@ var CassandraDriver = Base.extend({
       constraint.push('PRIMARY KEY');
     }
 
-    if (constraint) {
-      ret = { foreignKey: cb, constraints: constraint.join(' ') };
-    }
-    else {
-      ret = { foreignKey: cb }
-    }
-
-    return ret
+    return (constraint) ? constraint.join(' ') : ''
   },
 
   addColumn: function(tableName, columnName, columnSpec, callback) {
@@ -178,6 +232,14 @@ var CassandraDriver = Base.extend({
     return this._super.apply(this, arguments);
   },
 
+  addMigrationRecord: function (name, callback) {
+    var Uuid = cassandra.types.Uuid;
+    var id = Uuid.random().toString();
+    this.runSql('INSERT INTO ' + this.escapeDDL(this.internals.migrationTable) +
+      ' (' + this.escapeDDL('id') + ', ' + this.escapeDDL('name') + ', ' + this.escapeDDL('run_on') +
+      ') VALUES (?, ?, ?)', [id, name, new Date()], { prepare: true}, callback);
+  },
+
   runSql: function() {
     var callback,
         minLength = 1;
@@ -205,8 +267,14 @@ var CassandraDriver = Base.extend({
       else
         params[params.length++] = prCB;
 
-      this.connection.query.apply(this.connection, params);
+      this.connection.execute.apply(this.connection, params);
     }.bind(this)).nodeify(callback);
+  },
+
+  allLoadedMigrations: function(callback) {
+    // Cassandra would order by default with the WITH CLUSTERING clause
+    var sql = 'SELECT * FROM ' + this._escapeDDL + this.internals.migrationTable + this._escapeDDL;
+    return this.all(sql, callback);
   },
 
   all: function() {
@@ -219,7 +287,7 @@ var CassandraDriver = Base.extend({
         return (err ? reject(err) : resolve(data));
       };
 
-      this.connection.query.apply(this.connection, [params[0], function(err, result){
+      this.connection.execute.apply(this.connection, [params[0], function(err, result){
         prCB(err, (result) ? result.rows : result);
       }]);
 
@@ -227,7 +295,9 @@ var CassandraDriver = Base.extend({
   },
 
   close: function(callback) {
-    this.connection.end();
+    this.connection.on('end', function() {
+      log.verbose("Cassandra connection closed")
+    });
     if( typeof(callback) === 'function' )
       return Promise.resolve().nodeify(callback);
     else
@@ -244,6 +314,17 @@ exports.connect = function(config, intern, callback) {
   log = intern.mod.log
   type = intern.mod.type
 
-  var db = new cassandra.Client(config)
-  callback(null, new CassandraDriver(db, config.schema, intern));
+  // Make sure the database is defined
+  if(config.keyspace === undefined) {
+    throw new Error('keyspace must be defined in database.json');
+  }
+
+  config.host = util.isArray(config.hosts) ? config.hosts : config.host;
+  
+  var db = new cassandra.Client({
+    contactPoints: config.host,
+    keyspace: config.keyspace,
+    authProvider: new cassandra.auth.PlainTextAuthProvider(config.user, config.password)
+  })
+  callback(null, new CassandraDriver(db, config.keyspace, intern));
 };

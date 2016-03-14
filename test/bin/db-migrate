@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+
+var resolve = require( 'resolve' );
+
+process.title = 'db-migrate';
+
+if ( process.argv.indexOf( '--verbose' ) !== -1 || process.argv.indexOf( '-v' ) !== -1 )
+  global.verbose = true;
+
+resolve( 'db-migrate', {
+
+basedir: process.cwd()
+}, function ( error, localModule ) {
+
+var DBMigrate, dbmigrate;
+
+if ( error ) {
+  DBMigrate = require( 'db-migrate' );
+}
+else {
+  DBMigrate = require( localModule );
+  msg = '[INFO] Detected and using the projects local version of db-migrate. ' +
+    '\'' + localModule + '\'';
+  console.log(msg)
+}
+
+if ( typeof( DBMigrate.getInstance ) !== 'function' ) {
+  DBMigrate = require( 'db-migrate' );
+
+  msg = '[WARN] Using global instead of local detected version as you have a ' +
+    'version older than 0.10.0 in your projects package.json!' ;
+  console.warn(msg)
+}
+
+dbmigrate = DBMigrate.getInstance( true, {cwd: process.cwd() + '/../test'} );
+dbmigrate.run();
+} );
