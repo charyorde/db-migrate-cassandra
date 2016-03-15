@@ -6,7 +6,7 @@ This is a contributed driver to the node-db-migrate database migration framework
 ### Installation
 Install db-migrate as [documented](http://umigrate.readthedocs.org/projects/db-migrate/en/v0.10.x/Getting%20Started/installation/)
 ```
-$ npm install -g db-migrate
+$ npm install -g db-migrate-cql
 ```
 
 ### Usage
