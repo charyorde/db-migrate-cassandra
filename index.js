@@ -11,6 +11,7 @@ var CassandraDriver = Base.extend({
     this._escapeString = '\''; 
     this._super(intern);
     this.internals = intern;
+    this.internals.notransactions = true;
     this.connection = connection;
     this.schema = schema;
     this.connection.connect(function(err) {
@@ -24,6 +25,10 @@ var CassandraDriver = Base.extend({
     })
   },
 
+  endMigration: function(cb) {
+    return Promise.resolve(null).nodeify(cb);
+  },
+
   mapDataType: function(str) {
     switch(str) {
       case type.INTEGER:
@@ -34,6 +39,14 @@ var CassandraDriver = Base.extend({
         return 'timestamp'
       case type.TEXT:
         return 'text'
+      case 'map':
+        return 'map'
+      case 'set':
+        return 'set'
+      case 'list':
+        return 'list'
+      case 'uuid':
+        return 'uuid'
     }
     return this._super(str);
   },
@@ -295,13 +308,18 @@ var CassandraDriver = Base.extend({
   },
 
   close: function(callback) {
-    this.connection.on('end', function() {
-      log.verbose("Cassandra connection closed")
-    });
-    if( typeof(callback) === 'function' )
-      return Promise.resolve().nodeify(callback);
-    else
-      return Promise.resolve();
+    return new Promise( function(resolve, reject) {
+    
+      this.connection.shutdown(function(err) {
+      
+        if (err) {
+          reject(err)
+        }
+        log.verbose("Cassandra connection closed")
+        resolve()
+      })
+    }.bind(this) )
+    .nodeify(callback)
   }
 })
 
@@ -319,7 +337,7 @@ exports.connect = function(config, intern, callback) {
     throw new Error('keyspace must be defined in database.json');
   }
 
-  config.host = util.isArray(config.hosts) ? config.hosts : config.host;
+  config.host = util.isArray(config.hosts) ? config.hosts : [config.host];
   
   var db = new cassandra.Client({
     contactPoints: config.host,
